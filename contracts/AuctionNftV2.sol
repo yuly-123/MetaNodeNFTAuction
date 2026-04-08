@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: MIT
-pragma solidity 0.8.28;
+// SPDX-License-Identifier: SEE LICENSE IN LICENSE
+pragma solidity ^0.8.28;
 
 import "./AuctionNftV1.sol";
 
@@ -10,6 +10,6 @@ contract AuctionNftV2 is AuctionNftV1
     }
 
     function newFeature() external pure returns (string memory) {
-        return "This is a new feature in UUPS V2";
+        return "This is a new feature in V2";
     }
 }

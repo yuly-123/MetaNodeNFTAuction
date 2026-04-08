@@ -23,7 +23,7 @@ contract AuctionNftV1 is Initializable, UUPSUpgradeable
         address highestBidderEth;       // 最高竞价者，ETH 账户地址
         address highestBidderErc20;     // 最高竞价者，ERC20 代币地址
     }
-    address admin;                                                  // 管理员地址
+    address public admin;                                           // 管理员地址
     uint256 public auctionId;                                       // 第几场拍卖，默认值0
     mapping(uint256 auctionId => Auction auction) public auctions;  // 拍卖数组
 

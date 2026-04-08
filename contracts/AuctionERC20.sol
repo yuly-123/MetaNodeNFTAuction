@@ -15,23 +15,23 @@ contract AuctionERC20 is ERC20, AggregatorV3Interface
     }
 
     // AggregatorV3Interface 接口实现，返回固定值，方便测试。
-    function decimals() public view override(ERC20, AggregatorV3Interface) returns(uint8) {
+    function decimals() public pure override(ERC20, AggregatorV3Interface) returns(uint8) {
         return 18;
     }
 
     // AggregatorV3Interface 接口实现，返回固定值，方便测试。
-    function description() external view override(AggregatorV3Interface) returns(string memory) {
+    function description() external pure override(AggregatorV3Interface) returns(string memory) {
         return "AuctionERC20";
     }
 
     // AggregatorV3Interface 接口实现，返回固定值，方便测试。
-    function version() external view returns(uint256) {
+    function version() external pure returns(uint256) {
         return 1;
     }
 
     // AggregatorV3Interface 接口实现，返回固定值，方便测试。
     function getRoundData(uint80 _roundId) external view returns(uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound) {
-        return (uint80(1), 1e8, block.timestamp, block.timestamp, uint80(1));
+        return (_roundId, 1e8, block.timestamp, block.timestamp, uint80(1));
     }
 
     // AggregatorV3Interface 接口实现，返回固定值，方便测试。
