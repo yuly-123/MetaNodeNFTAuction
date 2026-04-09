@@ -186,6 +186,17 @@ contract AuctionNftV1Test is Test
         
         string memory newFeature = upgradedAuction.newFeature();
         assertEq(keccak256(abi.encodePacked(newFeature)), keccak256(abi.encodePacked("This is a new feature in V2")));
+
+        // 存储都在代理合约，并不在逻辑合约，auctionV1是代理合约地址，newImpl是新逻辑合约地址，upgradedAuction是升级后代理合约的接口类型转换，
+        console2.log("auctionV1 address:", address(auctionV1));
+        console2.log("newImpl address:", address(newImpl));
+        console2.log("upgradedAuction address:", address(upgradedAuction));
+        // console2.log("upgradedAuction.auctionId() : ", upgradedAuction.auctionId());
+        // console2.log("upgradedAuction.getVersion() : ", upgradedAuction.getVersion());
+        // console2.log("upgradedAuction.newFeature() : ", upgradedAuction.newFeature());
+        // console2.log("newImpl.auctionId() : ", newImpl.auctionId());
+        // console2.log("newImpl.getVersion() : ", newImpl.getVersion());
+        // console2.log("newImpl.newFeature() : ", newImpl.newFeature());
     }
 
     // 测试非管理员地址升级合约，应该 revert。
