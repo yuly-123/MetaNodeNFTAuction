@@ -100,41 +100,63 @@ async function main() {
   const erc721AsSeller = erc721.connect(seller);
   await erc721AsSeller.getFunction("setApprovalForAll")(proxyAddress, true);
 
+  // 部署预言机喂价，并设置预言机地址（这里直接部署了两个 MockOracle，一个模拟 ETH/USD，一个模拟 USDC/USD）
+  const ethOracleArtifact = await hre.artifacts.readArtifact("MockOracle");
+  const ethOracleFactory = new ethers.ContractFactory(ethOracleArtifact.abi, ethOracleArtifact.bytecode, implAdmin);
+  const ethOracle = await ethOracleFactory.deploy(3000e8);  // 3000 美元，精确到小数点后8位
+
+  const usdcOracleArtifact = await hre.artifacts.readArtifact("MockOracle");
+  const usdcOracleFactory = new ethers.ContractFactory(usdcOracleArtifact.abi, usdcOracleArtifact.bytecode, implAdmin);
+  const usdcOracle = await usdcOracleFactory.deploy(1e8);   // 1 美元，精确到小数点后8位
+
+  await auctionV1.getFunction("setTokenOracle")(ethers.ZeroAddress, await ethOracle.getAddress());
+  await auctionV1.getFunction("setTokenOracle")(await erc20.getAddress(), await usdcOracle.getAddress());
+
+  // 监听事件
+  console.log("监听事件...");
+  auctionV1.on("StartBid", (auctionId, nft, seller, tokenId) => {
+    console.log("新拍卖启动:", { auctionId: auctionId.toString(), nft, seller, tokenId: tokenId.toString(), });
+  });
+  auctionV1.on("Bid", (auctionId, sender, amount) => {
+    console.log("新出价:", { auctionId: auctionId.toString(), sender, amount: ethers.formatEther(amount), });
+  });
+  auctionV1.on("EndBid", (auctionId, highestBidder, highestBidDollar) => {
+    console.log("新拍卖结束:", { auctionId: auctionId.toString(), highestBidder, highestBidDollar: ethers.formatUnits(highestBidDollar, 8), });
+  });
+
   // 启动拍卖
   console.log("启动拍卖...");
-  const tx1 = await auctionV1.getFunction("start")(await erc20.getAddress(), await erc721.getAddress(), sellerWallet.address, 1, 1000, 120);
+  const tx1 = await auctionV1.getFunction("start")(await erc20.getAddress(), await erc721.getAddress(), sellerWallet.address, 1, 1, 120);
   console.log("交易哈希:", tx1.hash);
   await tx1.wait();
   console.log("启动拍卖成功");
 
   // 打印拍卖详情
-  const auctionId = await auctionV1.getFunction("auctionId")();
-  if (auctionId > 0n) {
-    const auctionData = await auctionV1.getFunction("auctions")(auctionId - 1n);
-    console.log("\n3. 拍卖 ", auctionId, " 详情:");
-    console.log("   - 竞价使用的代币合约地址:", auctionData[0]);
-    console.log("   - 要拍卖的 nft 代币的 合约地址:", auctionData[1]);
-    console.log("   - 要拍卖的 nft 代币的 卖家地址:", auctionData[2]);
-    console.log("   - 要拍卖的 nft 代币的 tokenId:", auctionData[3]);
-    console.log("   - 拍卖开始时间:", new Date(Number(auctionData[4]) * 1000).toISOString());
-    console.log("   - 拍卖起始价格(美元):", ethers.formatUnits(auctionData[5], 8));
-    console.log("   - 拍卖持续时间(秒):", auctionData[6].toString());
-    console.log("   - 最高竞价(代币):", ethers.formatEther(auctionData[7]));
-    console.log("   - 最高竞价(美元):", ethers.formatUnits(auctionData[8], 8));
-    console.log("   - 最高竞价者地址(钱包):", auctionData[9]);
-    console.log("   - 最高竞价者地址(代币):", auctionData[10]);
-  }
+  const auctionId = await auctionV1.getFunction("auctionId")() - 1n;
+  const auctionData = await auctionV1.getFunction("auctions")(auctionId);
+  console.log("\n3. 拍卖 ", auctionId, " 详情:");
+  console.log("   - 竞价使用的代币合约地址:", auctionData[0]);
+  console.log("   - 要拍卖的 nft 代币的 合约地址:", auctionData[1]);
+  console.log("   - 要拍卖的 nft 代币的 卖家地址:", auctionData[2]);
+  console.log("   - 要拍卖的 nft 代币的 tokenId:", auctionData[3]);
+  console.log("   - 拍卖开始时间:", new Date(Number(auctionData[4]) * 1000).toISOString());
+  console.log("   - 拍卖起始价格(美元):", ethers.formatUnits(auctionData[5], 8));
+  console.log("   - 拍卖持续时间(秒):", auctionData[6].toString());
+  console.log("   - 最高竞价(代币):", ethers.formatEther(auctionData[7]));
+  console.log("   - 最高竞价(美元):", ethers.formatUnits(auctionData[8], 8));
+  console.log("   - 最高竞价者地址(钱包):", auctionData[9]);
+  console.log("   - 最高竞价者地址(代币):", auctionData[10]);
 
   // 出价
   const auctionV1Buyer = auctionV1.connect(buyer);
   console.log("出价...");
-  const tx2 = await auctionV1Buyer.getFunction("bid")(0, ethers.parseEther("1"), { value: ethers.parseEther("1") });
+  const tx2 = await auctionV1Buyer.getFunction("bid")(0, ethers.parseEther("0.001"), { value: ethers.parseEther("0.001") });
   console.log("交易哈希:", tx2.hash);
   await tx2.wait();
   console.log("出价成功");
 
   // 结束拍卖
-  await provider.send("evm_increaseTime", [600]);  // 增加 600 秒，确保拍卖时间已到
+  await provider.send("evm_increaseTime", [Number(auctionData[6]) + 1]);  // 增加时间，确保拍卖结束
   await provider.send("evm_mine", []);
   console.log("结束拍卖...");
   const tx3 = await auctionV1.getFunction("end")(0);
@@ -142,21 +164,9 @@ async function main() {
   await tx3.wait();
   console.log("结束拍卖成功");
 
-  // 监听所有事件
-  console.log("监听事件...");
-  auctionV1.on("StartBid", (auctionId, event) => {
-    console.log("新拍卖启动:", auctionId.toString());
-  });
-
-  auctionV1.on("Bid", (sender, amount, event) => {
-    console.log("新出价:", sender, ethers.formatEther(amount), "ETH");
-  });
-
-  auctionV1.on("EndBid", (auctionId, event) => {
-    console.log("拍卖结束:", auctionId.toString());
-  });
-
   console.log("脚本执行完成!");
+
+  await new Promise(r => setTimeout(r, 6000));
 }
 
 // 运行脚本并处理错误
