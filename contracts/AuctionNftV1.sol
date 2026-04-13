@@ -6,9 +6,10 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 
-contract AuctionNftV1 is Initializable, UUPSUpgradeable
+contract AuctionNftV1 is Initializable, UUPSUpgradeable, ReentrancyGuard
 {
     struct Auction {
         IERC20 paymentToken;            // 竞价使用的代币合约地址
@@ -54,7 +55,6 @@ contract AuctionNftV1 is Initializable, UUPSUpgradeable
         require(paymentToken != address(0), "invalid paymentToken");
         require(nft != address(0), "invalid nft");
         require(seller != address(0), "invalid seller");
-        require(tokenId > 0, "invalid tokenId");
         require(startingDollar > 0, "invalid startingDollar");
         require(duration >= 30, "invalid duration");
 
@@ -73,19 +73,30 @@ contract AuctionNftV1 is Initializable, UUPSUpgradeable
 
         IERC721(nft).transferFrom(seller, address(this), tokenId);  // 要拍卖的 tokenId 从卖家转到本合约，需提前授权本合约可操作。
         auctionId++;
-        emit StartBid(auctionId, nft, seller, tokenId);
+        emit StartBid(auctionId - 1, nft, seller, tokenId);
     }
 
     // 竞价
     // auctionId_ : 拍卖场次
     // amount : 竞价金额
-    function bid(uint256 auctionId_, uint256 amount) external payable {
+    function bid(uint256 auctionId_, uint256 amount) external payable nonReentrant {
         Auction storage auction = auctions[auctionId_];     // 拍卖数组
         require(block.timestamp < auction.startingTime + auction.duration, "ended");
         require(amount > 0, "invalid amount");
         require(msg.sender != auction.seller, "seller cannot bid");
         require(msg.sender != auction.highestBidderEth, "already highest bidder");
         require(msg.sender != auction.highestBidderErc20, "already highest bidder");
+
+        // 如果有人出过价，给上一个最高竞价者退款，退 ETH 还是 ERC20
+        if (auction.highestBidderEth != address(0)) {
+            if (auction.highestBidderErc20 == address(0)) {
+                (bool success, ) = payable(auction.highestBidderEth).call{value: auction.highestBidToken}("");
+                require(success, "refund failed");
+            } else {
+                bool success = IERC20(address(auction.paymentToken)).transfer(auction.highestBidderErc20, auction.highestBidToken);
+                require(success, "refund failed");
+            }
+        }
 
         uint256 bidPrice;       // 竞价金额，单位为美元
         if (msg.value > 0) {    // ETH 竞价，还是 ERC20 竞价
@@ -99,7 +110,7 @@ contract AuctionNftV1 is Initializable, UUPSUpgradeable
             auction.highestBidToken = msg.value;
             auction.highestBidDollar = bidPrice;
             auction.highestBidderEth = msg.sender;
-            auction.highestBidderErc20 = address(0);
+            auction.highestBidderErc20 = address(0);    // ETH 竞价，最高竞价者 ERC20 地址置空
         } else {
             IERC20(address(auction.paymentToken)).transferFrom(msg.sender, address(this), amount);  // 付款的 ERC20 从买家转到本合约，需提前授权本合约可操作。
             AggregatorV3Interface dataFeed = AggregatorV3Interface(address(auction.paymentToken));  // Chainlink 价格预言机
@@ -113,26 +124,15 @@ contract AuctionNftV1 is Initializable, UUPSUpgradeable
 
             auction.highestBidToken = amount;
             auction.highestBidDollar = bidPrice;
-            auction.highestBidderEth = msg.sender;
-            auction.highestBidderErc20 = address(auction.paymentToken);
-        }
-
-        // 如果有人出过价，给上一个最高竞价者退款，退 ETH 还是 ERC20
-        if (auction.highestBidderEth != address(0)) {
-            if (auction.highestBidderErc20 == address(0)) {
-                (bool success, ) = payable(auction.highestBidderEth).call{value: auction.highestBidToken}("");
-                require(success, "refund failed");
-            } else {
-                bool success = IERC20(address(auction.paymentToken)).transfer(auction.highestBidderErc20, auction.highestBidToken);
-                require(success, "refund failed");
-            }
+            auction.highestBidderEth = address(0);      // erc20 竞价，最高竞价者 ETH 地址置空
+            auction.highestBidderErc20 = msg.sender;
         }
 
         emit Bid(auctionId_, msg.sender, amount);
     }
 
     // 结束拍卖，tokenId 转给最高竞价者，tokenId 的卖家收钱，收 ETH 还是 ERC20
-    function end(uint256 auctionId_) external {
+    function end(uint256 auctionId_) external nonReentrant {
         Auction storage auction = auctions[auctionId_];
         require(block.timestamp > auction.startingTime + auction.duration, "not ended");
         require(auction.highestBidderEth != address(0), "no bids"); // 至少有一个竞价者，才能结束拍卖
