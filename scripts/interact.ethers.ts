@@ -166,7 +166,7 @@ async function main() {
 
   console.log("脚本执行完成!");
 
-  await new Promise(r => setTimeout(r, 6000));
+  await new Promise(r => setTimeout(r, 6000));  // 等待事件日志输出完毕
 }
 
 // 运行脚本并处理错误
