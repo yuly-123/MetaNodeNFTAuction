@@ -11,6 +11,7 @@ import {AuctionERC20} from "./AuctionERC20.sol";
 import {AuctionERC721} from "./AuctionERC721.sol";
 import {AuctionNftV1} from "./AuctionNftV1.sol";
 import {AuctionNftV2} from "./AuctionNftV2.sol";
+import {MockOracle} from "./MockOracle.sol";
 
 contract AuctionNftV1Test is Test
 {
@@ -18,11 +19,13 @@ contract AuctionNftV1Test is Test
     AuctionERC721 private nft;
     AuctionNftV1 private auctionV1;
     AuctionNftV2 private auctionV2;
+    MockOracle private ethOracle;
+    MockOracle private usdcOracle;
     ProxyAdmin private proxyAdminInstance;
 
     address private implAdmin = address(0xA11CE);
     address private proxyAdmin = address(0xBEEF);   // ProxyAdmin 合约管理员地址，负责升级合约
-    address private seller = address(0xB0B);
+    address private seller = address(0xB0B122);
     address private bidder1 = address(0xB0123);
     address private bidder2 = address(0xB0124);
 
@@ -46,18 +49,30 @@ contract AuctionNftV1Test is Test
         proxyAdminInstance = ProxyAdmin(proxyAdminAddress);
 
         usdc = new AuctionERC20("USDC", "USDC");
-
         nft = new AuctionERC721("NFT", "NFT");
         nft.mint(seller, 1);
         nft.mint(seller, 2);
         nft.mint(seller, 9);
-        
+
         vm.startPrank(seller);
         nft.setApprovalForAll(address(auctionV1), true);
         vm.stopPrank();
+        console2.log("isApprovedForAll() : ", nft.isApprovedForAll(seller, address(auctionV1))); // 查询授权状态，应该输出 true
 
-        // console2.log(nft.isApprovedForAll(seller, address(auctionV1))); // 查询授权状态，应该输出 true
-        // console2.log("setUp() completed");
+        ethOracle = new MockOracle(3000e8); // 3000 美元，精确到小数点后8位
+        usdcOracle = new MockOracle(1e8);   // 1 美元，精确到小数点后8位
+        vm.startPrank(implAdmin);
+        auctionV1.setTokenOracle(address(0), address(ethOracle));
+        auctionV1.setTokenOracle(address(usdc), address(usdcOracle));
+        vm.stopPrank();
+        // uint256 tokenPrice0 = auctionV1.getPriceInDollar(address(0));
+        // uint256 tokenPriceUsdc = auctionV1.getPriceInDollar(address(usdc));
+        // console2.log("address(0), address(ethOracle) : ", address(0), address(ethOracle));
+        // console2.log("address(usdc), address(usdcOracle) : ", address(usdc), address(usdcOracle));
+        // console2.log("setUp() tokenPrice0 : ", tokenPrice0);
+        // console2.log("setUp() tokenPriceUsdc : ", tokenPriceUsdc);
+
+        console2.log("setUp() completed");
     }
 
     // 测试 getVersion() 函数，应该返回 "AuctionNft V1"
@@ -79,32 +94,17 @@ contract AuctionNftV1Test is Test
     function test_startOnlyAdmin() public {
         vm.startPrank(seller);
         vm.expectRevert("not admin");
-        auctionV1.start(address(usdc), address(nft), seller, 1, 1000, 120);
+        auctionV1.start(address(usdc), address(nft), seller, 1, 12, 120);
         vm.stopPrank();
-        console2.log("tokenId:", uint256(1));
-
-        // (
-        //     IERC20 paymentToken_,
-        //     IERC721 nft_,
-        //     address seller_,
-        //     uint256 tokenId_,
-        //     uint256 startingTime_,
-        //     uint256 startingDollar_,
-        //     uint256 duration_,
-        //     uint256 highestBidToken_,
-        //     uint256 highestBidDollar_,
-        //     address highestBidderEth_,
-        //     address highestBidderErc20_
-        // ) = auctionV1.auctions(0);
-        // console2.log("auctionV1.auctions[0].tokenId:", tokenId_);
+        console2.log("AuctionNftV1.admin:", auctionV1.admin());  // 输出管理员地址，应该是 implAdmin 地址}
     }
 
     // 每发起一场拍卖，auctionId 就加1，测试 auctionId 是否正确自增。
     function test_startIncrementsAuctionId() public {
         vm.startPrank(implAdmin);
-        auctionV1.start(address(usdc), address(nft), seller, 1, 1000, 120);
+        auctionV1.start(address(usdc), address(nft), seller, 1, 12, 120);
         assertEq(auctionV1.auctionId(), 1);
-        auctionV1.start(address(usdc), address(nft), seller, 2, 1000, 120);
+        auctionV1.start(address(usdc), address(nft), seller, 2, 12, 120);
         assertEq(auctionV1.auctionId(), 2);
         vm.stopPrank();
         console2.log("auctionV1.auctionId():", auctionV1.auctionId());
@@ -113,53 +113,58 @@ contract AuctionNftV1Test is Test
     // 超过拍卖持续时间竞价
     function test_startAuctionGtDuration() public {
         vm.startPrank(implAdmin);
-        auctionV1.start(address(usdc), address(nft), seller, 1, 1000, 120);
-        vm.warp(block.timestamp + 1500);
-        console2.log("current time : ", block.timestamp);
+        auctionV1.start(address(usdc), address(nft), seller, 1, 1, 120);
         vm.startPrank(seller);
-        vm.deal(seller, 1 ether);   // 把 seller 地址的 ETH 余额直接设置为 1 ether
+        vm.deal(seller, 0.001 ether);   // 把 seller 地址的 ETH 余额直接设置为 0.001 ether
+
         uint256 currentAuctionId = auctionV1.auctionId() - 1;   // 当前 auctionId，start() 函数中用完会自增1，所以要减1。
+        (, , , , uint256 startingTime, , uint256 duration, , , , ) = auctionV1.auctions(currentAuctionId);
+        vm.warp(startingTime + duration + 1);   // 时间跳跃，超过拍卖持续时间
+        console2.log("startingTime : ", startingTime);
+        console2.log("duration : ", duration);
+        console2.log("current time : ", startingTime + duration + 1);
+
         vm.expectRevert("ended");
-        auctionV1.bid{value: 1 ether}(currentAuctionId, 1 ether);
+        auctionV1.bid{value: 0.001 ether}(currentAuctionId, 0.001 ether);
         vm.stopPrank();
     }
 
     // 竞价金额低于当前最高竞价金额
     function test_bidLowerThanHighestBid() public {
         vm.startPrank(implAdmin);
-        auctionV1.start(address(usdc), address(nft), seller, 1, 1000, 120);
+        auctionV1.start(address(usdc), address(nft), seller, 1, 1, 120);
         uint256 currentAuctionId = auctionV1.auctionId() - 1;
         
-        vm.deal(bidder1, 2 ether);
-        vm.deal(bidder2, 2 ether);
+        vm.deal(bidder1, 0.001 ether);
+        vm.deal(bidder2, 0.001 ether);
         
         vm.startPrank(bidder1);
-        auctionV1.bid{value: 2 ether}(currentAuctionId, 2 ether);
+        auctionV1.bid{value: 0.001 ether}(currentAuctionId, 0.001 ether);
         vm.startPrank(bidder2);
-        vm.expectRevert("invalid amount");
-        auctionV1.bid{value: 1.2 ether}(currentAuctionId, 1.2 ether);
+        vm.expectRevert("eth amount must greater than highestBidDollar");
+        auctionV1.bid{value: 0.001 ether}(currentAuctionId, 0.001 ether);
         vm.stopPrank();
     }
 
     // 轮翻竞价后的结果
     function test_bidResult() public {
         vm.startPrank(implAdmin);
-        auctionV1.start(address(usdc), address(nft), seller, 1, 1000, 120);
+        auctionV1.start(address(usdc), address(nft), seller, 1, 1, 120);
         uint256 currentAuctionId = auctionV1.auctionId() - 1;
 
-        vm.deal(bidder1, 20 ether);
-        vm.deal(bidder2, 20 ether);
+        vm.deal(bidder1, 0.004 ether);
+        vm.deal(bidder2, 0.002 ether);
 
         vm.startPrank(bidder1);
-        auctionV1.bid{value: 2 ether}(currentAuctionId, 2 ether);
+        auctionV1.bid{value: 0.001 ether}(currentAuctionId, 0.001 ether);
         vm.startPrank(bidder2);
-        auctionV1.bid{value: 3 ether}(currentAuctionId, 3 ether);
+        auctionV1.bid{value: 0.002 ether}(currentAuctionId, 0.002 ether);
         vm.startPrank(bidder1);
-        auctionV1.bid{value: 4 ether}(currentAuctionId, 4 ether);
+        auctionV1.bid{value: 0.003 ether}(currentAuctionId, 0.003 ether);
 
         (, , , , , , , uint256 highestBidToken, , address highestBidderEth, ) = auctionV1.auctions(currentAuctionId);
 
-        assertEq(highestBidToken, 4 ether);
+        assertEq(highestBidToken, 0.003 ether);
         assertEq(highestBidderEth, bidder1);
         vm.stopPrank();
     }
@@ -167,7 +172,7 @@ contract AuctionNftV1Test is Test
     // 测试升级到 V2 版本后，新的函数 getVersion() 和 newFeature() 是否正常工作。
     function test_upgrade() public {
         vm.startPrank(implAdmin);
-        auctionV1.start(address(usdc), address(nft), seller, 9, 1000, 120);
+        auctionV1.start(address(usdc), address(nft), seller, 9, 1, 120);
         uint256 oldAuctionId = auctionV1.auctionId();
         vm.stopPrank();
 
@@ -191,18 +196,15 @@ contract AuctionNftV1Test is Test
         console2.log("auctionV1 address:", address(auctionV1));
         console2.log("newImpl address:", address(newImpl));
         console2.log("upgradedAuction address:", address(upgradedAuction));
-        // console2.log("upgradedAuction.auctionId() : ", upgradedAuction.auctionId());
-        // console2.log("upgradedAuction.getVersion() : ", upgradedAuction.getVersion());
-        // console2.log("upgradedAuction.newFeature() : ", upgradedAuction.newFeature());
-        // console2.log("newImpl.auctionId() : ", newImpl.auctionId());
-        // console2.log("newImpl.getVersion() : ", newImpl.getVersion());
-        // console2.log("newImpl.newFeature() : ", newImpl.newFeature());
+        console2.log("upgradedAuction.auctionId() : ", upgradedAuction.auctionId());
+        console2.log("upgradedAuction.getVersion() : ", upgradedAuction.getVersion());
+        console2.log("upgradedAuction.newFeature() : ", upgradedAuction.newFeature());
     }
 
     // 测试非管理员地址升级合约，应该 revert。
     function test_upgradeByNonAdmin() public {
         vm.startPrank(implAdmin);
-        auctionV1.start(address(usdc), address(nft), seller, 9, 1000, 120);
+        auctionV1.start(address(usdc), address(nft), seller, 9, 1, 120);
         vm.stopPrank();
         
         AuctionNftV2 newImpl = new AuctionNftV2();

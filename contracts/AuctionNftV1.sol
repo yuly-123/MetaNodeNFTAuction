@@ -5,11 +5,10 @@ import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts-4.7.3/security/ReentrancyGuard.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 
-contract AuctionNftV1 is Initializable, UUPSUpgradeable, ReentrancyGuard
+contract AuctionNftV1 is Initializable, ReentrancyGuard
 {
     struct Auction {
         IERC20 paymentToken;            // 竞价使用的代币合约地址
@@ -27,6 +26,7 @@ contract AuctionNftV1 is Initializable, UUPSUpgradeable, ReentrancyGuard
     address public admin;                                           // 管理员地址
     uint256 public auctionId;                                       // 第几场拍卖，默认值0
     mapping(uint256 auctionId => Auction auction) public auctions;  // 拍卖数组
+    mapping(address => address) public tokenToOracle;               // 代币地址 => 价格预言机地址，拍卖合约通过价格预言机获取代币的美元价格
 
     event StartBid(uint256 indexed auctionId, address nft, address seller, uint256 tokenId);    // 发起拍卖事件
     event Bid(uint256 indexed auctionId, address sender, uint256 amount);                       // 竞价事件
@@ -46,9 +46,10 @@ contract AuctionNftV1 is Initializable, UUPSUpgradeable, ReentrancyGuard
         require(admin_ != address(0), "invalid admin");
         admin = admin_;
     }
-    // 重写父类函数，无实际调用。
-    function _authorizeUpgrade(address) internal override onlyAdmin {
-
+    // 设置代币的价格预言机地址，拍卖合约通过价格预言机获取代币的美元价格，必须是 Chainlink 价格预言机，且该预言机必须返回美元价格。
+    function setTokenOracle(address token, address oracle) external onlyAdmin {
+        require(oracle != address(0), "invalid oracle");
+        tokenToOracle[token] = oracle;
     }
     // 发起拍卖
     function start(address paymentToken, address nft, address seller, uint256 tokenId, uint256 startingDollar, uint256 duration) external onlyAdmin {
@@ -82,7 +83,7 @@ contract AuctionNftV1 is Initializable, UUPSUpgradeable, ReentrancyGuard
     function bid(uint256 auctionId_, uint256 amount) external payable nonReentrant {
         Auction storage auction = auctions[auctionId_];     // 拍卖数组
         require(block.timestamp < auction.startingTime + auction.duration, "ended");
-        require(amount > 0, "invalid amount");
+        require(amount > 0, "amount must greater than 0");
         require(msg.sender != auction.seller, "seller cannot bid");
         require(msg.sender != auction.highestBidderEth, "already highest bidder");
         require(msg.sender != auction.highestBidderErc20, "already highest bidder");
@@ -101,11 +102,11 @@ contract AuctionNftV1 is Initializable, UUPSUpgradeable, ReentrancyGuard
         uint256 bidPrice;       // 竞价金额，单位为美元
         if (msg.value > 0) {    // ETH 竞价，还是 ERC20 竞价
             require(amount == msg.value, "amount mismatch");
-            uint256 tokenPrice = 3000e8;                                    // 获取 ETH 的美元价格，本合约中，美元价格都精确到小数点后8位。
+            uint256 tokenPrice = getPriceInDollar(address(0));              // 获取 ETH 的美元价格，本合约中，美元价格都精确到小数点后8位。
             uint8 tokenDecimals = 18;                                       // ETH 的 decimals
             bidPrice = (amount * tokenPrice) / (10 ** tokenDecimals);       // amount 是 ETH 的最小单位 Wei，黄金准则：先乘后除。
-            require(bidPrice > auction.startingDollar, "invalid amount");   // 出价大于起拍价格
-            require(bidPrice > auction.highestBidDollar, "invalid amount"); // 出价大于最高价格
+            require(bidPrice > auction.startingDollar, "eth amount must greater than startingDollar");      // 出价大于起拍价格
+            require(bidPrice > auction.highestBidDollar, "eth amount must greater than highestBidDollar");  // 出价大于最高价格
 
             auction.highestBidToken = msg.value;
             auction.highestBidDollar = bidPrice;
@@ -113,14 +114,11 @@ contract AuctionNftV1 is Initializable, UUPSUpgradeable, ReentrancyGuard
             auction.highestBidderErc20 = address(0);    // ETH 竞价，最高竞价者 ERC20 地址置空
         } else {
             IERC20(address(auction.paymentToken)).transferFrom(msg.sender, address(this), amount);  // 付款的 ERC20 从买家转到本合约，需提前授权本合约可操作。
-            AggregatorV3Interface dataFeed = AggregatorV3Interface(address(auction.paymentToken));  // Chainlink 价格预言机
-            (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound) = dataFeed.latestRoundData();
-            emit Aggregator(roundId, answer, startedAt, updatedAt, answeredInRound);                // 价格预言机事件，方便测试验证。
-            uint256 tokenPrice = uint256(answer);                           // 获取 ERC20 的美元价格，
-            uint8 tokenDecimals = IERC20Metadata(address(auction.paymentToken)).decimals(); // ERC20 的 decimals
-            bidPrice = (amount * tokenPrice) / (10 ** tokenDecimals);       // amount 是 ERC20 的最小单位，黄金准则：先乘后除。
-            require(bidPrice > auction.startingDollar, "invalid amount");   // 出价大于起拍价格
-            require(bidPrice > auction.highestBidDollar, "invalid amount"); // 出价大于最高价格
+            uint256 tokenPrice = getPriceInDollar(address(auction.paymentToken));                   // 获取 ERC20 的美元价格，
+            uint8 tokenDecimals = IERC20Metadata(address(auction.paymentToken)).decimals();         // ERC20 的 decimals
+            bidPrice = (amount * tokenPrice) / (10 ** tokenDecimals);                               // amount 是 ERC20 的最小单位，黄金准则：先乘后除。
+            require(bidPrice > auction.startingDollar, "erc20 amount must greater than startingDollar");      // 出价大于起拍价格
+            require(bidPrice > auction.highestBidDollar, "erc20 amount must greater than highestBidDollar");  // 出价大于最高价格
 
             auction.highestBidToken = amount;
             auction.highestBidDollar = bidPrice;
@@ -149,6 +147,15 @@ contract AuctionNftV1 is Initializable, UUPSUpgradeable, ReentrancyGuard
         }
 
         emit EndBid(auctionId_, auction.highestBidderEth, auction.highestBidDollar);
+    }
+
+    function getPriceInDollar(address token) public returns (uint256) {
+        address oracle = tokenToOracle[token];
+        require(oracle != address(0), "oracle not set");
+        AggregatorV3Interface dataFeed = AggregatorV3Interface(oracle);
+        (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound) = dataFeed.latestRoundData();
+        emit Aggregator(roundId, answer, startedAt, updatedAt, answeredInRound);    // 价格预言机事件，方便测试验证。
+        return uint256(answer);
     }
 
     function getVersion() external pure virtual returns (string memory) {
