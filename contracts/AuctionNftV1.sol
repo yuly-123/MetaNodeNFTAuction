@@ -89,8 +89,8 @@ contract AuctionNftV1 is Initializable, ReentrancyGuard
         require(msg.sender != auction.highestBidderErc20, "already highest bidder");
 
         // 如果有人出过价，给上一个最高竞价者退款，退 ETH 还是 ERC20
-        if (auction.highestBidderEth != address(0)) {
-            if (auction.highestBidderErc20 == address(0)) {
+        if (auction.highestBidderEth != address(0) || auction.highestBidderErc20 != address(0)) {
+            if (auction.highestBidderEth != address(0)) {
                 (bool success, ) = payable(auction.highestBidderEth).call{value: auction.highestBidToken}("");
                 require(success, "refund failed");
             } else {
@@ -133,12 +133,12 @@ contract AuctionNftV1 is Initializable, ReentrancyGuard
     function end(uint256 auctionId_) external nonReentrant {
         Auction storage auction = auctions[auctionId_];
         require(block.timestamp > auction.startingTime + auction.duration, "not ended");
-        require(auction.highestBidderEth != address(0), "no bids"); // 至少有一个竞价者，才能结束拍卖
+        require(auction.highestBidderEth != address(0) || auction.highestBidderErc20 != address(0), "no bids"); // 至少有一个竞价者，才能结束拍卖
 
         // tokenId 转给最高竞价者，需提前授权本合约可操作。
         auction.nft.transferFrom(address(this), auction.highestBidderEth, auction.tokenId);
 
-        if (auction.highestBidderErc20 == address(0)) {
+        if (auction.highestBidderEth != address(0)) {
             (bool success, ) = payable(auction.seller).call{value: auction.highestBidToken}("");
             require(success, "refund failed");
         } else {
