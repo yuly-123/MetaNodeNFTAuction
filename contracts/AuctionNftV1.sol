@@ -135,18 +135,17 @@ contract AuctionNftV1 is Initializable, ReentrancyGuard
         require(block.timestamp > auction.startingTime + auction.duration, "not ended");
         require(auction.highestBidderEth != address(0) || auction.highestBidderErc20 != address(0), "no bids"); // 至少有一个竞价者，才能结束拍卖
 
-        // tokenId 转给最高竞价者，需提前授权本合约可操作。
-        auction.nft.transferFrom(address(this), auction.highestBidderEth, auction.tokenId);
-
         if (auction.highestBidderEth != address(0)) {
-            (bool success, ) = payable(auction.seller).call{value: auction.highestBidToken}("");
+            auction.nft.transferFrom(address(this), auction.highestBidderEth, auction.tokenId);     // tokenId 转给最高竞价者，需提前授权本合约可操作。
+            (bool success, ) = payable(auction.seller).call{value: auction.highestBidToken}("");    // 卖家收 ETH 竞价款
             require(success, "refund failed");
+            emit EndBid(auctionId_, auction.highestBidderEth, auction.highestBidDollar);
         } else {
-            bool success = IERC20(address(auction.paymentToken)).transfer(auction.seller, auction.highestBidToken);
+            auction.nft.transferFrom(address(this), auction.highestBidderErc20, auction.tokenId);   // tokenId 转给最高竞价者，需提前授权本合约可操作。
+            bool success = IERC20(address(auction.paymentToken)).transfer(auction.seller, auction.highestBidToken); // 卖家收 ERC20 竞价款
             require(success, "refund failed");
+            emit EndBid(auctionId_, auction.highestBidderErc20, auction.highestBidDollar);
         }
-
-        emit EndBid(auctionId_, auction.highestBidderEth, auction.highestBidDollar);
     }
 
     function getPriceInDollar(address token) public returns (uint256) {
